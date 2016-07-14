@@ -1,0 +1,468 @@
+cmake_host_tools = [
+	"CMAKE_C_COMPILER=$OutDir/clang+llvm-host/bin/clang",
+	"CMAKE_CXX_COMPILER=$OutDir/clang+llvm-host/bin/clang++",
+	"CMAKE_AR=$OutDir/clang+llvm-host/bin/llvm-ar",
+	"CMAKE_NM=$OutDir/clang+llvm-host/bin/llvm-nm",
+	"CMAKE_RANLIB=$OutDir/clang+llvm-host/bin/llvm-ranlib",
+	"CMAKE_OBJDUMP=$OutDir/clang+llvm-host/bin/llvm-objdump",
+	"CMAKE_OBJCOPY=false",
+	"CMAKE_STRIP=false",
+]
+
+// clang/llvm (for bootstraping)
+
+cmake(
+	name = "bootstrap/llvm_cmake",
+	src = "$SrcDir/third_party/llvm",
+	options = [
+		"CMAKE_BUILD_TYPE=Release",
+		"CMAKE_INSTALL_PREFIX=''",
+		"LLVM_TARGETS_TO_BUILD='host'",
+		"LLVM_INSTALL_TOOLCHAIN_ONLY=ON",
+		"LLVM_EXTERNAL_LIBCXX_SOURCE_DIR=$SrcDir/third_party/libcxx",
+		"LLVM_EXTERNAL_LIBCXXABI_SOURCE_DIR=$SrcDir/third_party/libcxxabi",
+		"LIBCXXABI_ENABLE_SHARED=OFF",
+		"LIBCXXABI_LIBCXX_INCLUDES=$SrcDir/third_party/libcxx/include",
+		"LIBCXX_ENABLE_SHARED=OFF",
+		"LIBCXX_CXX_ABI=libcxxabi",
+		"LIBCXX_CXX_ABI_INCLUDE_PATHS=$SrcDir/third_party/libcxxabi/include",
+		"DEFAULT_SYSROOT=\"$$([[ \"$$(uname)\" == \"Darwin\" ]] && echo \"$$(xcrun --show-sdk-path)\")\"",
+	],
+	buildDir = "$OutDir/build-llvm-host",
+)
+
+ninja(
+	name = "bootstrap/clang",
+	ninjaFile = "$OutDir/build-llvm-host/build.ninja",
+	env = [ "DESTDIR=$OutDir/clang+llvm-host" ],
+	targets = [ "install" ],
+)
+
+// binutils+gcc
+
+script(
+	name = "bootstrap/gcc",
+	script = "$SrcDir/third_party/gcc_none_toolchains/doit",
+	args = [ "-a 'aarch64 x86_64'", "-f", "-j$Jobs", "-o $OutDir/binutils-gcc" ],
+	outputs = [
+		"$OutDir/binutils-gcc/aarch64-elf-5.3.0-${HostOS}-x86_64",
+		"$OutDir/binutils-gcc/x86_64-elf-5.3.0-${HostOS}-x86_64",
+	],
+	workingDir = "$SrcDir/third_party/gcc_none_toolchains",
+)
+
+// binutils
+
+// TODO(MG-163): We shouldn't have to build binutils.
+//
+// Unfortunatelly, several libraries that are currently part of the sysroot are
+// currently part of Magenta's repository and Magenta's build system doesn't
+// allow building these without build the entire system including the kernel.
+// The kernel build uses a linker script which relies on behavior not (yet)
+// supported by lld and hence we build binutils if neecessary.
+
+script(
+	name = "toolchain/binutils_configure",
+	script = "$SrcDir/third_party/binutils-gdb/configure",
+	env = [ "PATH=$OutDir/clang+llvm-host/bin:$$PATH" ],
+	args = [
+		"CC=$OutDir/clang+llvm-host/bin/clang",
+		"CXX=$OutDir/clang+llvm-host/bin/clang++",
+		"AR=$OutDir/clang+llvm-host/bin/llvm-ar",
+		"NM=$OutDir/clang+llvm-host/bin/llvm-nm",
+		"RANLIB=$OutDir/clang+llvm-host/bin/llvm-ranlib",
+		"CXXFLAGS='-stdlib=libc++ -nostdinc++ -I$OutDir/clang+llvm-host/include/c++/v1'",
+		"LDFLAGS=\"$$([[ \"$$(uname)\" == \"Linux\" ]] && echo '-fuse-ld=lld') -L$OutDir/clang+llvm-host/lib -lc++ -lc++abi\"",
+		"--prefix=",
+		"--program-prefix=",
+		"--target=x86_64-elf",
+		"--enable-targets=aarch64-elf,x86_64-elf",
+		"--enable-deterministic-archives",
+		"--disable-werror", // Clang's -Werror checks are too strict
+		"--disable-nls", // Reduces dependencies and compile time
+		"--disable-gas", // We're using LLVM's integrated assembler
+		"--disable-gdb", // We don't need gdb to build the kernel
+		"--disable-sim", // We don't need a simulator either
+	],
+	genFiles = [ "$OutDir/build-binutils-$HostTriple/Makefile" ],
+	workingDir = "$OutDir/build-binutils-$HostTriple",
+	deps = [ "bootstrap/clang" ]
+)
+
+make(
+	name = "toolchain/binutils_make",
+	makefile = "$OutDir/build-binutils-$HostTriple/Makefile",
+	targets = [ "all" ],
+)
+
+make(
+	name = "toolchain/binutils",
+	makefile = "$OutDir/build-binutils-$HostTriple/Makefile",
+	targets = [ "DESTDIR=$OutDir/toolchains/clang+llvm-$HostTriple", "install" ],
+	deps = [ "toolchain/binutils_make" ],
+)
+
+// clang/llvm
+
+cmake(
+	name = "toolchain/clang_cmake",
+	env = [
+		"PATH=$OutDir/clang+llvm-host/bin:$$PATH",
+		"CXXFLAGS='-nostdinc++ -I$OutDir/clang+llvm-host/include/c++/v1'",
+		"LDFLAGS=\"$$([[ \"$$(uname)\" == \"Linux\" ]] && echo '-fuse-ld=lld') -L$OutDir/clang+llvm-host/lib\"",
+	],
+	src = "$SrcDir/third_party/llvm",
+	options = cmake_host_tools + [
+		"CMAKE_BUILD_TYPE=Release",
+		"CMAKE_INSTALL_PREFIX=''",
+		"LLVM_APPEND_VC_REV=ON",
+		"LLVM_ENABLE_LIBCXX=ON",
+		"LLVM_ENABLE_LIBCXXABI=ON",
+		"LLVM_TARGETS_TO_BUILD='ARM;AArch64;X86'",
+		"LLVM_INSTALL_TOOLCHAIN_ONLY=ON",
+		"LLVM_TOOLCHAIN_TOOLS='llvm-ar;llvm-ranlib;llvm-objdump;llvm-readobj;llvm-nm;llvm-size'",
+		"C_SUPPORTS_FPIC=ON",
+		"CXX_SUPPORTS_FPIC=ON",
+	],
+	buildDir = "$OutDir/build-llvm-$HostTriple",
+	deps = [ "bootstrap/clang" ]
+)
+
+ninja(
+	name = "toolchain/clang",
+	ninjaFile = "$OutDir/build-llvm-$HostTriple/build.ninja",
+	env = [
+		"PATH=$OutDir/clang+llvm-host/bin:$$PATH",
+		"DESTDIR=$OutDir/toolchains/clang+llvm-$HostTriple",
+	],
+	targets = [ "install" ],
+)
+
+cmake_target_tools = [
+	"CMAKE_C_COMPILER=$OutDir/toolchains/clang+llvm-$HostTriple/bin/clang",
+	"CMAKE_CXX_COMPILER=$OutDir/toolchains/clang+llvm-$HostTriple/bin/clang++",
+	"CMAKE_AR=$OutDir/toolchains/clang+llvm-$HostTriple/bin/llvm-ar",
+	"CMAKE_NM=$OutDir/toolchains/clang+llvm-$HostTriple/bin/llvm-nm",
+	"CMAKE_RANLIB=$OutDir/toolchains/clang+llvm-$HostTriple/bin/llvm-ranlib",
+	"CMAKE_OBJDUMP=$OutDir/toolchains/clang+llvm-$HostTriple/bin/llvm-objdump",
+	"CMAKE_OBJCOPY=false",
+	"CMAKE_STRIP=false",
+]
+
+// compiler-rt
+
+cmake(
+	name = "toolchain/compiler-rt_cmake",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"CFLAGS='-isystem $SrcDir/magenta/third_party/ulib/musl/include'",
+	],
+	src = "$SrcDir/third_party/compiler-rt/lib/builtins",
+	options = cmake_target_tools + [
+		"CMAKE_BUILD_TYPE=Release",
+		"CMAKE_INSTALL_PREFIX=''",
+		"CMAKE_TOOLCHAIN_FILE=$SrcDir/third_party/llvm/cmake/platforms/Fuchsia.cmake",
+		"LLVM_CONFIG_PATH=$OutDir/build-llvm-$HostTriple/bin/llvm-config",
+	],
+	deps = [ "toolchain/clang" ],
+	buildDir = "$OutDir/build-compiler-rt-aarch64+x86_64",
+)
+
+ninja(
+	name = "toolchain/compiler-rt",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"DESTDIR=$OutDir/toolchains/clang+llvm-$HostTriple",
+	],
+	ninjaFile = "$OutDir/build-compiler-rt-aarch64+x86_64/build.ninja",
+	targets = [ "install" ],
+)
+
+// musl
+
+magenta_flags = [
+	"BUILDROOT=$OutDir",
+	"ENABLE_BUILD_SYSROOT=true",
+]
+
+make(
+	name = "platform/musl_make_aarch64",
+	env = [ "PATH=$OutDir/binutils-gcc/aarch64-elf-5.3.0-${HostOS}-x86_64/bin:$$PATH" ],
+	targets = magenta_flags + [
+		// We use compiler-rt instead of libgcc as this is the runtime
+		// which is shipped as part of the Clang/LLVM toolchain.
+		"LIBGCC=$OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-aarch64.a",
+		"magenta-qemu-arm64",
+	],
+	makefile = "$SrcDir/magenta/makefile",
+	deps = [
+		"bootstrap/gcc",
+		"toolchain/compiler-rt",
+	],
+	outputs = [
+		"$OutDir/build-magenta-qemu-arm64/sysroot/lib",
+		"$OutDir/build-magenta-qemu-arm64/sysroot/include",
+	],
+)
+
+copy(
+	name = "platform/musl_aarch64",
+	sources = [
+		"$OutDir/build-magenta-qemu-arm64/sysroot/lib",
+		"$OutDir/build-magenta-qemu-arm64/sysroot/include",
+	],
+	destination = "$OutDir/platforms/aarch64-fuchsia",
+)
+
+make(
+	name = "platform/musl_make_x86_64",
+	env = [ "PATH=$OutDir/binutils-gcc/x86_64-elf-5.3.0-${HostOS}-x86_64/bin:$$PATH" ],
+	targets = magenta_flags + [
+		// We use compiler-rt instead of libgcc as this is the runtime
+		// which is shipped as part of the Clang/LLVM toolchain.
+		"LIBGCC=$OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-x86_64.a",
+		"magenta-pc-x86-64",
+	],
+	makefile = "$SrcDir/magenta/makefile",
+	deps = [
+		"bootstrap/gcc",
+		"toolchain/compiler-rt",
+	],
+	outputs = [
+		"$OutDir/build-magenta-pc-x86-64/sysroot/lib",
+		"$OutDir/build-magenta-pc-x86-64/sysroot/include",
+	],
+)
+
+copy(
+	name = "platform/musl_x86_64",
+	sources = [
+		"$OutDir/build-magenta-pc-x86-64/sysroot/lib",
+		"$OutDir/build-magenta-pc-x86-64/sysroot/include",
+	],
+	destination = "$OutDir/platforms/x86_64-fuchsia",
+)
+
+alias(
+	name = "platform/musl",
+	deps = [
+		"platform/musl_aarch64",
+		"platform/musl_x86_64",
+	],
+)
+
+// libcxxabi
+
+libcxxabi_options = [
+	"CMAKE_BUILD_TYPE=Release",
+	"CMAKE_INSTALL_PREFIX=''",
+	"CMAKE_TOOLCHAIN_FILE=$SrcDir/third_party/llvm/cmake/platforms/Fuchsia.cmake",
+	"LLVM_PATH=$SrcDir/third_party/llvm",
+	"LLVM_ENABLE_LIBCXX=ON",
+	"LIBCXXABI_LIBCXX_INCLUDES=$SrcDir/third_party/libcxx/include",
+	"LIBCXXABI_LIBUNWIND_INCLUDES=$SrcDir/third_party/libunwind/include",
+	"LIBCXXABI_USE_LLVM_UNWINDER=ON",
+	"LIBCXXABI_ENABLE_SHARED=OFF",
+]
+
+cmake(
+	name = "platform/libcxxabi_cmake_aarch64",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"LDFLAGS='-nodefaultlibs $OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-aarch64.a -lc'",
+	],
+	src = "$SrcDir/third_party/libcxxabi",
+	options = cmake_target_tools + libcxxabi_options + [
+		"LIBCXXABI_TARGET_TRIPLE='aarch64-fuchsia'",
+		"LIBCXXABI_SYSROOT=$OutDir/platforms/aarch64-fuchsia",
+	],
+	deps = [ "platform/musl_aarch64" ],
+	buildDir = "$OutDir/build-libcxxabi-aarch64",
+)
+
+ninja(
+	name = "platform/libcxxabi_aarch64",
+	ninjaFile = "$OutDir/build-libcxxabi-aarch64/build.ninja",
+	env = [ "DESTDIR=$OutDir/platforms/aarch64-fuchsia" ],
+	targets = [ "install" ],
+)
+
+cmake(
+	name = "platform/libcxxabi_cmake_x86_64",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"LDFLAGS='-nodefaultlibs $OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-x86_64.a -lc'",
+	],
+	src = "$SrcDir/third_party/libcxxabi",
+	options = cmake_target_tools + libcxxabi_options + [
+		"LIBCXXABI_TARGET_TRIPLE='x86_64-fuchsia'",
+		"LIBCXXABI_SYSROOT=$OutDir/platforms/x86_64-fuchsia",
+	],
+	deps = [ "platform/musl_x86_64" ],
+	buildDir = "$OutDir/build-libcxxabi-x86_64",
+)
+
+ninja(
+	name = "platform/libcxxabi_x86_64",
+	ninjaFile = "$OutDir/build-libcxxabi-x86_64/build.ninja",
+	env = [ "DESTDIR=$OutDir/platforms/x86_64-fuchsia" ],
+	targets = [ "install" ],
+)
+
+alias(
+	name = "platform/libcxxabi",
+	deps = [
+		"platform/libcxxabi_aarch64",
+		"platform/libcxxabi_x86_64",
+	],
+)
+
+// libcxx
+
+libcxx_options = [
+	"CMAKE_BUILD_TYPE=Release",
+	"CMAKE_INSTALL_PREFIX=''",
+	"CMAKE_TOOLCHAIN_FILE=$SrcDir/third_party/llvm/cmake/platforms/Fuchsia.cmake",
+	"LLVM_PATH=$SrcDir/third_party/llvm",
+	"LIBCXX_CXX_ABI=libcxxabi",
+	"LIBCXXABI_USE_LLVM_UNWINDER=ON",
+	"LIBCXX_CXX_ABI_INCLUDE_PATHS=$SrcDir/third_party/libcxxabi/include",
+	"LIBCXX_ABI_VERSION=2",
+	"LIBCXX_ENABLE_SHARED=OFF",
+	"LIBCXX_HAS_MUSL_LIBC=ON",
+]
+
+cmake(
+	name = "platform/libcxx_cmake_aarch64",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"LDFLAGS='-nodefaultlibs $OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-aarch64.a -lc'",
+	],
+	src = "$SrcDir/third_party/libcxx",
+	options = cmake_target_tools + libcxx_options + [
+		"LIBCXX_TARGET_TRIPLE='aarch64-fuchsia'",
+		"LIBCXX_SYSROOT=$OutDir/platforms/aarch64-fuchsia",
+	],
+	deps = [ "platform/libcxxabi_aarch64" ],
+	buildDir = "$OutDir/build-libcxx-aarch64",
+)
+
+ninja(
+	name = "platform/libcxx_aarch64",
+	ninjaFile = "$OutDir/build-libcxx-aarch64/build.ninja",
+	env = [ "DESTDIR=$OutDir/platforms/aarch64-fuchsia" ],
+	targets = [ "install" ],
+)
+
+cmake(
+	name = "platform/libcxx_cmake_x86_64",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"LDFLAGS='-nodefaultlibs $OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-x86_64.a -lc'",
+	],
+	src = "$SrcDir/third_party/libcxx",
+	options = cmake_target_tools + libcxx_options + [
+		"LIBCXX_TARGET_TRIPLE='x86_64-fuchsia'",
+		"LIBCXX_SYSROOT=$OutDir/platforms/x86_64-fuchsia",
+	],
+	deps = [ "platform/libcxxabi_x86_64" ],
+	buildDir = "$OutDir/build-libcxx-x86_64",
+)
+
+ninja(
+	name = "platform/libcxx_x86_64",
+	ninjaFile = "$OutDir/build-libcxx-x86_64/build.ninja",
+	env = [ "DESTDIR=$OutDir/platforms/x86_64-fuchsia" ],
+	targets = [ "install" ],
+)
+
+alias(
+	name = "platform/libcxx",
+	deps = [
+		"platform/libcxx_aarch64",
+		"platform/libcxx_x86_64",
+	],
+)
+
+// libunwind
+
+libunwind_options = [
+	"CMAKE_BUILD_TYPE=Release",
+	"CMAKE_INSTALL_PREFIX=''",
+	"CMAKE_TOOLCHAIN_FILE=$SrcDir/third_party/llvm/cmake/platforms/Fuchsia.cmake",
+	"LLVM_PATH=$SrcDir/third_party/llvm",
+	"LLVM_ENABLE_LIBCXX=ON",
+	"LIBUNWIND_ENABLE_SHARED=OFF",
+]
+
+cmake(
+	name = "platform/libunwind_cmake_aarch64",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"LDFLAGS='-nodefaultlibs $OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-aarch64.a -lc'",
+	],
+	src = "$SrcDir/third_party/libunwind",
+	options = cmake_target_tools + libunwind_options + [
+		"LIBUNWIND_TARGET_TRIPLE='aarch64-fuchsia'",
+		"LIBUNWIND_SYSROOT=$OutDir/platforms/aarch64-fuchsia",
+	],
+	deps = [
+		"platform/musl_aarch64",
+		"platform/libcxx_aarch64",
+	],
+	buildDir = "$OutDir/build-libunwind-aarch64",
+)
+
+ninja(
+	name = "platform/libunwind_aarch64",
+	ninjaFile = "$OutDir/build-libunwind-aarch64/build.ninja",
+	env = [ "DESTDIR=$OutDir/platforms/aarch64-fuchsia" ],
+	targets = [ "install" ],
+)
+
+cmake(
+	name = "platform/libunwind_cmake_x86_64",
+	env = [
+		"PATH=$OutDir/toolchains/clang+llvm-$HostTriple/bin:$$PATH",
+		"LDFLAGS='-nodefaultlibs $OutDir/build-compiler-rt-aarch64+x86_64/lib/fuchsia/libclang_rt.builtins-x86_64.a -lc'",
+	],
+	src = "$SrcDir/third_party/libunwind",
+	options = cmake_target_tools + libunwind_options + [
+		"LIBUNWIND_TARGET_TRIPLE='x86_64-fuchsia'",
+		"LIBUNWIND_SYSROOT=$OutDir/platforms/x86_64-fuchsia",
+	],
+	deps = [
+		"platform/musl_x86_64",
+		"platform/libcxx_x86_64",
+	],
+	buildDir = "$OutDir/build-libunwind-x86_64",
+)
+
+ninja(
+	name = "platform/libunwind_x86_64",
+	ninjaFile = "$OutDir/build-libunwind-x86_64/build.ninja",
+	env = [ "DESTDIR=$OutDir/platforms/x86_64-fuchsia" ],
+	targets = [ "install" ],
+)
+
+alias(
+	name = "platform/libunwind",
+	deps = [
+		"platform/libunwind_aarch64",
+		"platform/libunwind_x86_64",
+	],
+)
+
+// sdk
+
+alias(
+	name = "sdk",
+	deps = [
+		"toolchain/clang",
+		"toolchain/compiler-rt",
+		"platform/musl",
+		"platform/libcxxabi",
+		"platform/libcxx",
+		"platform/libunwind",
+	],
+)
