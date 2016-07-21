@@ -51,6 +51,14 @@ script(
 	workingDir = "$SrcDir/third_party/gcc_none_toolchains",
 )
 
+clean(
+	name = "bootstrap/clean",
+	dirs = [
+		"$OutDir/build-llvm-host",
+		"$OutDir/binutils-gcc",
+	]
+)
+
 // binutils
 
 // TODO(MG-163): We shouldn't have to build binutils.
@@ -176,6 +184,15 @@ ninja(
 	],
 	ninjaFile = "$OutDir/build-compiler-rt-aarch64+x86_64/build.ninja",
 	targets = [ "install" ],
+)
+
+clean(
+	name = "toolchain/clean",
+	dirs = [
+		"$OutDir/build-binutils-$HostTriple",
+		"$OutDir/build-llvm-$HostTriple",
+		"$OutDir/build-compiler-rt-aarch64+x86_64",
+	]
 )
 
 // musl
@@ -453,6 +470,20 @@ alias(
 	],
 )
 
+clean(
+	name = "platform/clean",
+	dirs = [
+		"$OutDir/build-magenta-qemu-arm64",
+		"$OutDir/build-magenta-pc-x86-64",
+		"$OutDir/build-libcxxabi-aarch64",
+		"$OutDir/build-libcxxabi-x86_64",
+		"$OutDir/build-libcxx-aarch64",
+		"$OutDir/build-libcxx-x86_64",
+		"$OutDir/build-libunwind-aarch64",
+		"$OutDir/build-libunwind-x86_64",
+	]
+)
+
 // sdk
 
 alias(
@@ -464,5 +495,14 @@ alias(
 		"platform/libcxxabi",
 		"platform/libcxx",
 		"platform/libunwind",
+	],
+)
+
+clean(
+	name = "clean",
+	deps = [
+		"bootstrap/clean",
+		"toolchain/clean",
+		"platform/clean",
 	],
 )
