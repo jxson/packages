@@ -12,10 +12,13 @@ cmake(
 		"CMAKE_INSTALL_PREFIX=''",
 		"LLVM_APPEND_VC_REV=ON",
 		"LLVM_ENABLE_LIBCXX=ON",
-		"LLVM_ENABLE_LIBCXXABI=ON",
 		"LLVM_TARGETS_TO_BUILD='ARM;AArch64;X86'",
 		"LLVM_INSTALL_TOOLCHAIN_ONLY=ON",
 		"LLVM_TOOLCHAIN_TOOLS='llvm-ar;llvm-ranlib;llvm-dwarfdump;llvm-objdump;llvm-readobj;llvm-nm;llvm-size;llvm-symbolizer'",
+		// Don't build 32-bit version of compiler-rt which currently
+		// fails to link because 32-bit version of libc++ is missing.
+		"CAN_TARGET_i386=FALSE",
+		"CAN_TARGET_i686=FALSE",
 	],
 	buildDir = "$OutDir/build-llvm-$HostTriple",
 )
