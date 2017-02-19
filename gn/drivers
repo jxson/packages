@@ -5,6 +5,7 @@
     "labels": [
         "//drivers/wifi/qualcomm/qca6174",
         "//drivers/wifi/mediatek/rt5370",
+        "//drivers/wifi/wlan",
         "//magma:magma_service_driver"
     ],
     "binaries": [
@@ -19,6 +20,10 @@
         {
             "binary": "rt2870.bin",
             "bootfs_path": "lib/firmware/rt2870.bin"
+        },
+        {
+            "binary": "libwlan.so",
+            "bootfs_path": "lib/driver/wlan.so"
         }
     ]
 }
