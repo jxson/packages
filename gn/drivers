@@ -6,6 +6,7 @@
         "//drivers/wifi/qualcomm/qca6174",
         "//drivers/wifi/mediatek/rt5370",
         "//drivers/wifi/wlan",
+        "//drivers/wifi/wlan:wl",
         "//magma:magma_service_driver"
     ],
     "binaries": [
@@ -24,6 +25,10 @@
         {
             "binary": "libwlan.so",
             "bootfs_path": "lib/driver/wlan.so"
+        },
+        {
+            "binary": "wl",
+            "bootfs_path": "bin/wl"
         }
     ]
 }
