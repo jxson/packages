@@ -1,7 +1,8 @@
 {
     "labels": [
         "//application",
-        "//apps/modular/src/bootstrap"
+        "//apps/modular/src/bootstrap",
+	"//application/lib/far/fuzz:far-fuzzer(//build/toolchain:host_x64)"
     ],
     "binaries": [
         {
