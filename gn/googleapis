@@ -1,0 +1,15 @@
+{
+    "languages": [
+        "dart"
+    ],
+    "labels": [
+        "//apps/modules/googleapis",
+        "//apps/modules/googleapis:test"
+    ],
+    "binaries": [
+      {
+          "binary": "gmail.dartx",
+          "bootfs_path": "apps/googleapis/gmail"
+      }
+    ]
+}
